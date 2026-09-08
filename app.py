@@ -1,9 +1,3 @@
-Site                City          Users
-Midland Park        Wellington    35
-Te Papa Plaza       Wellington    18
-Riddiford Street    Wellington    42
-Cuba Street         Wellington    27
-
 import json
 import folium
 from folium.plugins import Draw
@@ -20,8 +14,12 @@ st.write("Draw points, lines, or polygons on the map using the toolbar on the le
 col1, col2 = st.columns([3, 2])
 
 with col1:
-    # Initialize Folium Map centered on Wellington
-    m = folium.Map(location=[-41.2865, 174.7762], zoom_start=13, tiles="CartoDB positron")
+    # Initialize Folium Map centered on Wellington using reliable OpenStreetMap tiles
+    m = folium.Map(
+        location=[-41.2865, 174.7762], 
+        zoom_start=13, 
+        tiles="OpenStreetMap"
+    )
 
     # Add Draw Control (allows points, lines, polygons, rectangles)
     draw_control = Draw(
@@ -46,8 +44,8 @@ with col1:
 with col2:
     st.subheader("📌 Digitized Features Data")
 
-    # Extract drawings from map output state
-    all_drawings = output.get("all_drawings") if output else None
+    # Safely extract drawings from map output state
+    all_drawings = output.get("all_drawings") if output and isinstance(output, dict) else None
 
     if all_drawings and len(all_drawings) > 0:
         st.success(f"Captured {len(all_drawings)} feature(s)!")
@@ -60,7 +58,7 @@ with col2:
             }
             gdf = gpd.GeoDataFrame.from_features(geojson_data, crs="EPSG:4326")
             
-            # Display attribute summary table
+            # Display geometry summary
             st.write("### Feature Summary")
             st.dataframe(gdf[["geometry"]], use_container_width=True)
 
