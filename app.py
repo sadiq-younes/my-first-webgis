@@ -31,7 +31,7 @@ def load_saved_features():
 
 saved_data = load_saved_features()
 
-col1, col2 = st.columns([3, 2])
+col1, col2 = st.columns([7, 3])
 
 with col1:
     m = folium.Map(location=[-41.2865, 174.7762], zoom_start=13, tiles="OpenStreetMap")
