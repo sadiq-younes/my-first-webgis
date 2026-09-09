@@ -10,7 +10,7 @@ st.set_page_config(page_title="My First WebGIS", layout="wide")
 st.title("🗺️ Interactive WebGIS Digitizer")
 st.write("Draw points, lines, or polygons on the map using the toolbar on the left.")
 
-# Setup layout: Map on left, GeoJSON inspector on right
+# Setup layout: Map on left, GeoJSON inspector & form on right
 col1, col2 = st.columns([3, 2])
 
 with col1:
@@ -42,7 +42,7 @@ with col1:
     output = st_folium(m, width="100%", height=550)
 
 with col2:
-    st.subheader("📌 Digitized Features Data")
+    st.subheader("📌 Feature Attributes")
 
     # Safely extract drawings from map output state
     all_drawings = output.get("all_drawings") if output and isinstance(output, dict) else None
@@ -50,22 +50,52 @@ with col2:
     if all_drawings and len(all_drawings) > 0:
         st.success(f"Captured {len(all_drawings)} feature(s)!")
 
-        # Convert raw drawings into a GeoDataFrame
+        # Create input fields for each drawn feature to assign a Name attribute
+        named_features = []
+        
+        st.write("### Assign Feature Names")
+        with st.form("attribute_form"):
+            for idx, feature in enumerate(all_drawings):
+                geom_type = feature.get("geometry", {}).get("type", "Feature")
+                
+                # Retrieve existing name if available in session_state, else default to "Site #X"
+                default_name = f"{geom_type} #{idx + 1}"
+                feature_name = st.text_input(
+                    label=f"Name for {geom_type} #{idx + 1}:",
+                    value=default_name,
+                    key=f"feature_name_{idx}"
+                )
+                
+                # Make a shallow copy and set the 'name' attribute in GeoJSON properties
+                feature_copy = dict(feature)
+                if "properties" not in feature_copy or feature_copy["properties"] is None:
+                    feature_copy["properties"] = {}
+                
+                feature_copy["properties"]["name"] = feature_name
+                named_features.append(feature_copy)
+
+            # Submit button to apply names to dataset
+            submit_attributes = st.form_submit_button("Update Attributes")
+
+        # Convert attributed drawings into a GeoDataFrame
         try:
             geojson_data = {
                 "type": "FeatureCollection",
-                "features": all_drawings
+                "features": named_features
             }
             gdf = gpd.GeoDataFrame.from_features(geojson_data, crs="EPSG:4326")
             
-            # Display geometry summary
-            st.write("### Feature Summary")
-            st.dataframe(gdf[["geometry"]], use_container_width=True)
+            # Display summary table with the new 'name' column alongside geometry
+            st.write("### Feature Summary Table")
+            if "name" in gdf.columns:
+                st.dataframe(gdf[["name", "geometry"]], use_container_width=True)
+            else:
+                st.dataframe(gdf[["geometry"]], use_container_width=True)
 
-            # Download button for spatial file
+            # Download button for spatial file with embedded names
             geojson_str = json.dumps(geojson_data, indent=2)
             st.download_button(
-                label="📥 Download GeoJSON File",
+                label="📥 Download GeoJSON with Attributes",
                 data=geojson_str,
                 file_name="digitized_features.geojson",
                 mime="application/json"
@@ -78,4 +108,4 @@ with col2:
         except Exception as e:
             st.error(f"Error parsing geometries: {e}")
     else:
-        st.info("Use the drawing tools on the map to place markers or draw shapes. Drawn items will display here automatically.")
+        st.info("Use the drawing tools on the map to place markers or draw shapes. Attribute forms will display here automatically.")
