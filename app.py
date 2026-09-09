@@ -42,7 +42,7 @@ RANK_COLORS = {
     "Poor": "#e74c3c"        # Red
 }
 
-col1, col2 = st.columns([7, 3])
+col1, col2 = st.columns([8, 2])
 
 with col1:
     m = folium.Map(location=[-41.2865, 174.7762], zoom_start=13, tiles="OpenStreetMap")
