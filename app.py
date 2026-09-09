@@ -6,14 +6,15 @@ import streamlit as st
 from streamlit_folium import st_folium
 from sqlalchemy import text
 
-st.set_page_config(page_title="WebGIS PostGIS Integration", layout="wide")
-st.title("🗺️ WebGIS with PostGIS Database Persistence")
+st.set_page_config(page_title="PPGIS Place Assessment", layout="wide")
+st.title("🗳️ PPGIS: Public Space Assessment & Rating Tool")
 
 # 1. Establish SQL Connection via Streamlit Secrets
 db_conn = st.connection("postgresql", type="sql", connect_args={"sslmode": "require"})
 
-# 2. Ensure Table Exists with PostGIS Geometry Support
+# 2. Ensure Table Exists with PostGIS Geometry, Rank, and Comment Support
 with db_conn.session as session:
+    # Auto-migrate table if upgrading from basic spatial_features
     session.execute(text("""
         CREATE TABLE IF NOT EXISTS spatial_features (
             id SERIAL PRIMARY KEY,
@@ -21,28 +22,65 @@ with db_conn.session as session:
             geom GEOMETRY(Geometry, 4326),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE spatial_features ADD COLUMN IF NOT EXISTS rank VARCHAR(50);
+        ALTER TABLE spatial_features ADD COLUMN IF NOT EXISTS comment TEXT;
     """))
     session.commit()
 
-# 3. Read Existing Features from PostGIS
+# 3. Read Existing PPGIS Features from PostGIS
 def load_saved_features():
-    query = "SELECT id, name, ST_AsGeoJSON(geom) as geojson FROM spatial_features ORDER BY id ASC;"
+    query = "SELECT id, name, rank, comment, ST_AsGeoJSON(geom) as geojson FROM spatial_features ORDER BY id ASC;"
     return db_conn.query(query, ttl=0)
 
 saved_data = load_saved_features()
+
+# Quality ranking color mapping
+RANK_COLORS = {
+    "Excellent": "#2ecc71",  # Green
+    "Good": "#3498db",       # Blue
+    "Moderate": "#f1c40f",   # Yellow
+    "Poor": "#e74c3c"        # Red
+}
 
 col1, col2 = st.columns([7, 3])
 
 with col1:
     m = folium.Map(location=[-41.2865, 174.7762], zoom_start=13, tiles="OpenStreetMap")
 
-    # Render saved features from PostGIS onto the map
+    # Render saved PPGIS features onto map with rank-based styling and popups
     if not saved_data.empty:
         for _, row in saved_data.iterrows():
             try:
                 geom = json.loads(row["geojson"])
-                label = f"ID #{row['id']}: {row['name']}" if row['name'] else f"Feature #{row['id']}"
-                folium.GeoJson(geom, tooltip=label).add_to(m)
+                rank = row["rank"] if row["rank"] in RANK_COLORS else "Moderate"
+                color = RANK_COLORS.get(rank, "#95a5a6")
+                
+                popup_html = f"""
+                <div style="font-family: sans-serif; min-width: 160px;">
+                    <h4 style="margin: 0 0 5px 0;">{row['name']}</h4>
+                    <b>Rank:</b> <span style="color:{color}; font-weight:bold;">{rank}</span><br>
+                    <b>Comment:</b> <i>{row['comment'] if row['comment'] else 'No comment provided.'}</i>
+                </div>
+                """
+                
+                folium.GeoJson(
+                    geom,
+                    style_function=lambda x, c=color: {
+                        "fillColor": c, 
+                        "color": c, 
+                        "weight": 3, 
+                        "fillOpacity": 0.5
+                    },
+                    marker=folium.CircleMarker(
+                        radius=7, 
+                        fill_color=color, 
+                        color="#000", 
+                        weight=1, 
+                        fill_opacity=0.8
+                    ),
+                    tooltip=f"{row['name']} ({rank})",
+                    popup=folium.Popup(popup_html, max_width=250)
+                ).add_to(m)
             except Exception:
                 pass
 
@@ -62,80 +100,115 @@ with col1:
     )
     draw_control.add_to(m)
     
-    output = st_folium(m, width="100%", height=550)
+    output = st_folium(m, width="100%", height=600)
 
 with col2:
-    tab1, tab2, tab3 = st.tabs(["➕ Add New", "✏️ Edit Name", "🗑️ Delete"])
+    tab1, tab2, tab3 = st.tabs(["➕ Add Assessment", "✏️ Edit Record", "🗑️ Delete"])
 
-    # ------------------ TAB 1: ADD NEW FEATURES ------------------
+    # ------------------ TAB 1: ADD NEW PPGIS FEATURE ------------------
     with tab1:
-        st.subheader("Save Active Session Drawings")
+        st.subheader("Submit Location Assessment")
         all_drawings = output.get("all_drawings") if output and isinstance(output, dict) else None
 
         if all_drawings and len(all_drawings) > 0:
-            st.success(f"Captured {len(all_drawings)} shape(s) in active session")
+            st.success(f"Captured {len(all_drawings)} active location drawing(s)")
 
             with st.form("postgis_save_form"):
                 drawing_payloads = []
                 for idx, feature in enumerate(all_drawings):
                     geom_type = feature.get("geometry", {}).get("type", "Feature")
+                    st.markdown(f"**Location #{idx + 1} ({geom_type})**")
                     
                     feat_name = st.text_input(
-                        label=f"Name for {geom_type} #{idx + 1}:",
+                        label="Place Name / Label:",
                         value=f"Site {geom_type} #{idx + 1}",
                         key=f"db_name_{idx}"
                     )
                     
+                    feat_rank = st.selectbox(
+                        label="Rate Quality:",
+                        options=["Excellent", "Good", "Moderate", "Poor"],
+                        index=1,
+                        key=f"db_rank_{idx}"
+                    )
+                    
+                    feat_comment = st.text_area(
+                        label="Observations / Comments:",
+                        placeholder="Enter notes about access, safety, amenities, etc...",
+                        key=f"db_comment_{idx}"
+                    )
+                    
                     geom_json_str = json.dumps(feature["geometry"])
-                    drawing_payloads.append((feat_name, geom_json_str))
+                    drawing_payloads.append((feat_name, feat_rank, feat_comment, geom_json_str))
+                    st.divider()
 
-                save_submitted = st.form_submit_button("💾 Save to PostGIS", type="primary")
+                save_submitted = st.form_submit_button("💾 Submit PPGIS Record", type="primary")
 
             if save_submitted:
                 with db_conn.session as session:
-                    for name, geojson_str in drawing_payloads:
+                    for name, rank, comment, geojson_str in drawing_payloads:
                         sql_query = text("""
-                            INSERT INTO spatial_features (name, geom)
-                            VALUES (:name, ST_GeomFromGeoJSON(:geom));
+                            INSERT INTO spatial_features (name, rank, comment, geom)
+                            VALUES (:name, :rank, :comment, ST_GeomFromGeoJSON(:geom));
                         """)
-                        session.execute(sql_query, {"name": name, "geom": geojson_str})
+                        session.execute(sql_query, {
+                            "name": name, 
+                            "rank": rank, 
+                            "comment": comment, 
+                            "geom": geojson_str
+                        })
                     session.commit()
                 
                 st.success("Successfully written to PostGIS database!")
                 st.rerun()
         else:
-            st.info("Draw shapes on the map to save new records.")
+            st.info("Draw shapes or place markers on the map to add your assessment.")
 
-    # ------------------ TAB 2: EDIT EXISTING FEATURES ------------------
+    # ------------------ TAB 2: EDIT EXISTING RECORD ------------------
     with tab2:
-        st.subheader("Edit Feature Name")
+        st.subheader("Edit Assessment Details")
         if not saved_data.empty:
             feature_options = {f"ID #{row['id']} - {row['name']}": row['id'] for _, row in saved_data.iterrows()}
             selected_option = st.selectbox("Select Feature to Edit:", list(feature_options.keys()))
             selected_id = feature_options[selected_option]
 
-            # Get current name
-            current_name = saved_data[saved_data["id"] == selected_id]["name"].values[0]
+            # Fetch current row values
+            current_row = saved_data[saved_data["id"] == selected_id].iloc[0]
+            current_name = current_row["name"] or ""
+            current_rank = current_row["rank"] if current_row["rank"] in RANK_COLORS else "Good"
+            current_comment = current_row["comment"] or ""
             
             with st.form("edit_form"):
                 updated_name = st.text_input("New Name:", value=current_name)
+                
+                rank_opts = ["Excellent", "Good", "Moderate", "Poor"]
+                rank_idx = rank_opts.index(current_rank) if current_rank in rank_opts else 1
+                updated_rank = st.selectbox("New Rank:", options=rank_opts, index=rank_idx)
+                
+                updated_comment = st.text_area("New Comment:", value=current_comment)
+                
                 edit_submitted = st.form_submit_button("✏️ Update Record", type="primary")
 
             if edit_submitted:
                 with db_conn.session as session:
                     sql_query = text("""
                         UPDATE spatial_features
-                        SET name = :name
+                        SET name = :name, rank = :rank, comment = :comment
                         WHERE id = :id;
                     """)
-                    session.execute(sql_query, {"name": updated_name, "id": selected_id})
+                    session.execute(sql_query, {
+                        "name": updated_name, 
+                        "rank": updated_rank, 
+                        "comment": updated_comment, 
+                        "id": selected_id
+                    })
                     session.commit()
                 st.success(f"Updated ID #{selected_id} successfully!")
                 st.rerun()
         else:
             st.info("No spatial records available to edit.")
 
-    # ------------------ TAB 3: DELETE FEATURES ------------------
+    # ------------------ TAB 3: DELETE RECORD ------------------
     with tab3:
         st.subheader("Delete Feature")
         if not saved_data.empty:
@@ -157,8 +230,10 @@ with col2:
         else:
             st.info("No spatial records available to delete.")
 
-    # Display database content summary table below tabs
+    # Display database content summary table
     st.write("---")
-    st.write("### Current PostGIS Records")
+    st.write("### Submitted PPGIS Records")
     if not saved_data.empty:
-        st.dataframe(saved_data[["id", "name"]], use_container_width=True)
+        st.dataframe(saved_data[["id", "name", "rank", "comment"]], use_container_width=True)
+    else:
+        st.info("No records saved in PostGIS yet.")
